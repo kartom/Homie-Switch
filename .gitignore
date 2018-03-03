@@ -2,5 +2,6 @@
 .piolibdeps
 .clang_complete
 .gcc-flags.json
+.travis.yml
 .vscode/*
 data/homie/config.json
