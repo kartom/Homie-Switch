@@ -2,9 +2,10 @@
 #include "Homie.h"
 #include "Bounce2.h"
 
-#define FIRMWARE_VERSION "0.9.5"
+#define FIRMWARE_VERSION "0.9.6"
 /* Revision history:
-   0.9.5 Removed ArduinoOTA and relying on Homie OTA to save space...
+   0.9.6 Switched to Homie 2.0.0
+   0.9.5 Removed ArduinoOTA and relying on Homie OTA to save space... (Homie 2.0.0-beta.3)
    0.9.4 Changed led behaviour
 */
 
@@ -24,7 +25,7 @@
   #define RELAY1_PIN  12
   //GPIO12=D6
   #define BUTTON2_PIN 14
-  //GPIO14=D5
+  //GPIO14=D5 
   #define RELAY2_PIN  13
   //GPIO13=D7  
 #endif
@@ -33,6 +34,7 @@
 HomieNode switchNode1("switch1", "switch");
 Bounce button1 = Bounce();
 bool on1 = false;
+unsigned long connectedMillis = millis();
 
 void set_switch1() {
   digitalWrite(RELAY1_PIN, on1 ? HIGH : LOW);
@@ -52,7 +54,6 @@ bool switch1OnHandler(const HomieRange& range, const String& value) {
 
 
 #ifdef BUTTON2_PIN
-
   HomieNode switchNode2("switch2", "switch");
   Bounce button2 = Bounce();
   bool on2 = false;
@@ -68,8 +69,9 @@ bool switch1OnHandler(const HomieRange& range, const String& value) {
     set_switch2();
     return true;
   }
-
 #endif
+
+
 
 
 void setup() {
@@ -78,6 +80,7 @@ void setup() {
         #ifdef HOMIE_PIN
           Homie.setLedPin(HOMIE_PIN);
         #endif
+        Homie.setResetTrigger(BUTTON1_PIN, LOW, 30000);
         Homie.setup();
 
         pinMode(RELAY1_PIN,OUTPUT);
@@ -103,19 +106,33 @@ void setup() {
 }
 
 void loop() {
-        Homie.loop();
 
-        button1.update();
-        if(button1.fell()) {
-                on1=!on1;
-                set_switch1();
+    if ( Homie.isConnected() ) {
+        // This counter will stop when disconnected
+        connectedMillis = millis();
+    } else {
+        // If disconnected for over 5 minutes
+        if ( millis() - connectedMillis >= 300000 ) {
+        Serial.println("Restarting in ten seconds");
+        delay(10000);
+        // The chances of being in OTA whilst disconnected from MQTT are slim.
+        ESP.restart();
+        };
+    }
+
+    Homie.loop();
+
+    button1.update();
+    if(button1.fell()) {
+            on1=!on1;
+            set_switch1();
+    }
+
+    #ifdef RELAY2_PIN
+        button2.update();
+        if(button2.fell()) {
+                on2=!on2;
+                set_switch2();
         }
-
-        #ifdef RELAY2_PIN
-          button2.update();
-          if(button2.fell()) {
-                  on2=!on2;
-                  set_switch2();
-          }
-        #endif
+    #endif
 }
