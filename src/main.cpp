@@ -34,7 +34,6 @@
 HomieNode switchNode1("switch1", "switch");
 Bounce button1 = Bounce();
 bool on1 = false;
-unsigned long connectedMillis = millis();
 
 void set_switch1() {
   digitalWrite(RELAY1_PIN, on1 ? HIGH : LOW);
@@ -106,19 +105,6 @@ void setup() {
 }
 
 void loop() {
-
-    if ( Homie.isConnected() ) {
-        // This counter will stop when disconnected
-        connectedMillis = millis();
-    } else {
-        // If disconnected for over 5 minutes
-        if ( millis() - connectedMillis >= 300000 ) {
-        Serial.println("Restarting in ten seconds");
-        delay(10000);
-        // The chances of being in OTA whilst disconnected from MQTT are slim.
-        ESP.restart();
-        };
-    }
 
     Homie.loop();
 
