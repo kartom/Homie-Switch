@@ -2,76 +2,91 @@
 #include "Homie.h"
 #include "Bounce2.h"
 
-#define FIRMWARE_VERSION "0.9.6"
+#define FIRMWARE_VERSION "1.0.0"
 /* Revision history:
+   1.0.0 Switched to Homie 3.0.1
+         Removed reset when not connected, 
+         Added new functionality for long press of the button:
+           * >1 sek sends a message on switchN/broadcast_on (true or false depending on switch status) 
+           * >5 sek, both switches flashes on/off
+           * 5-10 sek (1-4 flashes), restart the device
+           * 10 sek (5 flashes), clears the decvice an restart it 
+           * >10 sek, nothing happens
+
    0.9.6 Switched to Homie 2.0.0
+
    0.9.5 Removed ArduinoOTA and relying on Homie OTA to save space... (Homie 2.0.0-beta.3)
+
    0.9.4 Changed led behaviour
 */
 
 #ifdef SONOFF
   #define FIRMWARE_NAME "Sonoff"
-  #define BUTTON1_PIN 0
-  //GPIO0=D3
-  #define RELAY1_PIN  12
-  //GPIO12=D6
+  #define NOF_SWITHCES 1
+  const int BUTTON_PIN[NOF_SWITHCES]= { 0 }; //GPIO0=D3
+  const int RELAY_PIN[NOF_SWITHCES]= { 12 }; //GPIO12=D6
+  HomieNode switchNode[NOF_SWITHCES]={ HomieNode("switch0", "switch") };
   #define HOMIE_PIN  13, LOW
 #endif
 
 #ifdef WIFISWITCH2
   #define FIRMWARE_NAME "WifiSwitch2"
-  #define BUTTON1_PIN 0
-  //GPIO0=D3
-  #define RELAY1_PIN  12
-  //GPIO12=D6
-  #define BUTTON2_PIN 14
-  //GPIO14=D5 
-  #define RELAY2_PIN  13
-  //GPIO13=D7  
+  #define NOF_SWITHCES 2
+  const int BUTTON_PIN[NOF_SWITHCES]= { 0, 14 }; //GPIO0=D3, GPIO14=D5 
+  const int  RELAY_PIN[NOF_SWITHCES]= { 12, 13 }; //GPIO12=D6, GPIO13=D7
+  HomieNode switchNode[NOF_SWITHCES]={ HomieNode("switch0", "switch"), HomieNode("switch1", "switch") };
 #endif
 
- 
-HomieNode switchNode1("switch1", "switch");
-Bounce button1 = Bounce();
-bool on1 = false;
+Bounce button[NOF_SWITHCES];
+unsigned long buttonMillis[NOF_SWITHCES];
+int buttonState[NOF_SWITHCES];
+bool on[NOF_SWITHCES] ;
 
-void set_switch1() {
-  digitalWrite(RELAY1_PIN, on1 ? HIGH : LOW);
-  #ifdef LED1_PIN
-    digitalWrite(LED1_PIN, on1 ? HIGH : LOW);
-  #endif
-  switchNode1.setProperty("on").send(on1 ? "true":"false");
-  Homie.getLogger() << "Switch1 is " << (on1 ? "on" : "off") << endl;
+void setSwitch(int n, bool state) {
+    on[n]=state;
+    digitalWrite(RELAY_PIN[n], on[n] ? HIGH : LOW);
+    #ifdef LED1_PIN
+        digitalWrite(LED1_PIN, on1 ? HIGH : LOW);
+    #endif
+    switchNode[n].setProperty("on").send(on[n] ? "true":"false");
+    Homie.getLogger() << "Switch " << n << " is " << (on[n] ? "on" : "off") << endl;
 }
 
-bool switch1OnHandler(const HomieRange& range, const String& value) {
+bool switch0_OnHandler(const HomieRange& range, const String& value) {
   if (value != "true" && value != "false" && value != "1" && value != "0") return false;
-  on1 = (value == "true" || value =="1");
-  set_switch1();
+  setSwitch(0, value == "true" || value =="1");
   return true;
 }
 
-
-#ifdef BUTTON2_PIN
-  HomieNode switchNode2("switch2", "switch");
-  Bounce button2 = Bounce();
-  bool on2 = false;
-
-  void set_switch2() {
-    digitalWrite(RELAY2_PIN, on2 ? HIGH : LOW);
-    switchNode2.setProperty("on").send(on2 ? "true":"false");
-    Homie.getLogger() << "Switch2 is " << (on2 ? "on" : "off") << endl;
-  }
-  bool switch2OnHandler(const HomieRange& range, const String& value) {
-    if (value != "true" && value != "false" && value != "1" && value != "0") return false;
-    on2 = (value == "true" || value =="1");
-    set_switch2();
-    return true;
-  }
+#if NOF_SWITCHES==2
+    bool switch1_OnHandler(const HomieRange& range, const String& value) {
+        if (value != "true" && value != "false" && value != "1" && value != "0") return false;
+        setSwitch(1,value == "true" || value =="1");
+        return true;
+    }
 #endif
 
+void setLights(bool state){
+    for (int n = 0; n < NOF_SWITHCES; n++) {
+        digitalWrite(RELAY_PIN[n], state ? HIGH : LOW);
+    }
+}
 
+void resetLights() {
+    for (int n = 0; n < NOF_SWITHCES; n++) {
+        digitalWrite(RELAY_PIN[n], on[n] ? HIGH : LOW);
+    }
+}
 
+void flashLights(int times) {
+    for (int i = 0; i < times; i++) {
+        setLights(false);
+        delay(500);
+        setLights(true);
+        delay(500);
+    }
+    resetLights();    
+}
 
 void setup() {
         Serial.begin(115200);
@@ -79,46 +94,74 @@ void setup() {
         #ifdef HOMIE_PIN
           Homie.setLedPin(HOMIE_PIN);
         #endif
-        Homie.setResetTrigger(BUTTON1_PIN, LOW, 30000);
+
+        for (int i = 0; i < NOF_SWITHCES; i++) {
+            buttonState[i]=0;
+            on[i]=false;
+            pinMode(RELAY_PIN[i],OUTPUT);
+            digitalWrite(RELAY_PIN[i],LOW);
+            pinMode(BUTTON_PIN[i],INPUT);
+            button[i].attach(BUTTON_PIN[i]);
+            button[i].interval(10);
+        }
+        switchNode[0].advertise("on").settable(switch0_OnHandler);
+        #if NOF_SWITCHES >= 2
+            switchNode[1].advertise("on").settable(switch1_OnHandler);
+        #endif        
+        Homie.disableResetTrigger();
         Homie.setup();
 
-        pinMode(RELAY1_PIN,OUTPUT);
-        digitalWrite(RELAY1_PIN,LOW);
-        pinMode(BUTTON1_PIN,INPUT);
-        button1.attach(BUTTON1_PIN);
-        button1.interval(10);
-        switchNode1.advertise("on").settable(switch1OnHandler);
         #ifdef LED1_PIN
           pinMode(LED1_PIN,OUTPUT);
           digitalWrite(LED1_PIN,HIGH);
         #endif
-
-        #ifdef BUTTON2_PIN
-          pinMode(RELAY2_PIN,OUTPUT);
-          digitalWrite(RELAY2_PIN,LOW);
-          pinMode(BUTTON2_PIN,INPUT);
-          button2.attach(BUTTON2_PIN);
-          button2.interval(10);
-          switchNode2.advertise("on").settable(switch2OnHandler);
-        #endif
-        
 }
 
 void loop() {
 
     Homie.loop();
 
-    button1.update();
-    if(button1.fell()) {
-            on1=!on1;
-            set_switch1();
-    }
-
-    #ifdef RELAY2_PIN
-        button2.update();
-        if(button2.fell()) {
-                on2=!on2;
-                set_switch2();
+    for (int n = 0; n < NOF_SWITHCES; n++)  {
+        button[n].update();
+        if(button[n].fell()) {
+                setSwitch(n,!on[n]);
+                buttonMillis[n] = millis();
+                buttonState[n] = 0;
         }
-    #endif
+        if( button[n].read()==LOW) {
+            if(buttonState[n]==0 && millis()-buttonMillis[n]>=1000) {
+                //Pressed for more than 1 second, send command (state=1)
+                Homie.getLogger() << "Button "<< n << " send long press command, state=" << buttonState[n] << endl;
+                buttonState[n]=1;
+            }
+            else {
+                //Reset and clear sequence
+                for (int i = 1; i <= 12; i++) {
+                    if(buttonState[n]==i && millis()-buttonMillis[n]>=(8000+(unsigned long)i*1000)) {
+                        setLights((i % 2)==0);
+                        Homie.getLogger() << "Button "<< n << " clear sequence, state=" << buttonState[n] << endl;
+                        buttonState[n]++;
+                    }
+                }
+            }
+        }
+        if(button[n].rose()) {
+            Homie.getLogger() << "Button "<< n <<" released at state=" << buttonState[n] << endl;
+            if(buttonState[n]==1) {
+                switchNode[n].setProperty("broadcast_on").send(on[n] ? "true":"false");
+                Homie.getLogger() << "Button "<< n << " broadcast " << (on[n] ? "on":"off");
+            }
+            if(buttonState[n]>=2 && buttonState[n]<10) {
+                Homie.getLogger() << "Restart device" << endl;
+                flashLights(2);
+                ESP.reset();
+            }
+            if(buttonState[n]==11) {
+                Homie.getLogger() << "Clear and restart device" << endl;
+                flashLights(5);
+                Homie.reset();
+            }
+            resetLights();    
+        }
+    }
 }
